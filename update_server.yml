@@ -1,0 +1,46 @@
+---
+- name: Bezpieczna aktualizacja systemu
+  hosts: linux
+  become: yes
+  vars:
+    webhook_url: "https://discord.com/api/webhooks/1462356772177182905/_wQkGr6DwHan1mhefNrwRod242Tv2TE21v5kS4vlSG4dCGOMKX4e4hSfolurDgX8WxFu"
+    
+  tasks:
+    - name: Rozpocznij proces aktualizacji
+      block:
+        - name: Odśwież pamięć podręczną 
+          dnf:
+            update_cache: yes
+
+        - name: Zaktualizuj wszystkie pakiety
+          dnf:
+            name: "*"
+            state: latest
+          register: update_result
+
+        - name: Sprawdź, czy wymagany jest restart
+          command: dnf needs-restarting -r
+          register: reboot_required
+          ignore_errors: yes
+          changed_when: false
+          failed_when: reboot_required.rc > 1
+
+        - name: Wyświetl informację o konieczności restartu
+          debug:
+            msg: "System wymaga restartu!"
+          when: reboot_required.rc == 1
+
+      rescue:
+        - name: POWIADOMIENIE O AWARII
+          uri:
+            url: "{{ webhook_url }}"
+            method: POST
+            body_format: json
+            body:
+              content: "**BŁĄD AKTUALIZACJI!**\nSerwer: {{ inventory_hostname }}\nNie udało się wykonać automatycznej aktualizacji pakietów."
+            status_code: 204
+          ignore_errors: yes
+          
+        - name: Oznacz zadanie jako nieudane
+          fail:
+            msg: "Aktualizacja nie powiodła się. Wysłano powiadomienie."

@@ -1,0 +1,14 @@
+all:
+  children:
+    linux:
+      hosts:
+        10.0.2.11 # AGH_Gajda
+
+    windows:
+      hosts:
+        10.0.2.12 # WINSRV_Gajda
+      vars:
+        ansible_user: ansible
+        ansible_connection: ssh
+        ansible_shell_type: powershell
+        ansible_port: 22

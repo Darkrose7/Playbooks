@@ -1,0 +1,105 @@
+---
+- name: Instalacja i Konfiguracja AdGuard Home z LVM RAID1
+  hosts: linux
+  become: yes
+  vars:
+    disk_1: "/dev/sdb"
+    disk_2: "/dev/sdc"
+    install_dir: "/adguardhome"
+
+  tasks:
+    - name: Zainstaluj lvm2
+      dnf:
+        name: lvm2
+        state: present
+
+    - name: Utwórz Grupę Woluminów (VG)
+      community.general.lvg:
+        vg: adg_vg
+        pvs:
+          - "{{ disk_1 }}"
+          - "{{ disk_2 }}"
+
+    - name: Utwórz Wolumin Logiczny (LV) w RAID1
+      community.general.lvol:
+        vg: adg_vg
+        lv: adg_lv
+        size: 100%FREE       
+        opts: --type raid1 --mirrors 1
+        shrink: false     
+        resizefs: true   
+
+    - name: Sformatuj wolumin (ext4)
+      filesystem:
+        fstype: ext4
+        dev: /dev/adg_vg/adg_lv
+
+    - name: Utwórz katalog montowania
+      file:
+        path: "{{ install_dir }}"
+        state: directory
+
+    - name: Zamontuj wolumin
+      mount:
+        path: "{{ install_dir }}"
+        src: /dev/adg_vg/adg_lv
+        fstype: ext4
+        state: mounted
+
+    - name: Zainstaluj tar
+      dnf:
+        name: tar
+        state: present
+
+    - name: Pobierz i rozpakuj AdGuard Home
+      unarchive:
+        src: https://static.adguard.com/adguardhome/release/AdGuardHome_linux_amd64.tar.gz
+        dest: "{{ install_dir }}"
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+
+    - name: Nadaj uprawnienia wykonywania dla pliku AdGuardHome
+      file:
+        path: "{{ install_dir }}/AdGuardHome/AdGuardHome"
+        mode: '0755'  
+
+    - name: Ustaw kontekst SELinux dla katalogu AdGuard (jeśli SELinux jest włączony)
+      command: restorecon -Rv "{{ install_dir }}/AdGuardHome"
+      ignore_errors: yes 
+
+    - name: Zainstaluj usługę systemową AdGuard Home
+      command: "{{ install_dir }}/AdGuardHome/AdGuardHome -s install"
+      args:
+        chdir: "{{ install_dir }}/AdGuardHome"
+        creates: /etc/systemd/system/AdGuardHome.service
+
+    - name: Uruchom usługę
+      service:
+        name: AdGuardHome
+        state: started
+        enabled: yes
+
+    - name: Otwórz porty w Firewalld
+      firewalld:
+        service: "{{ item.service | default(omit) }}"
+        port: "{{ item.port | default(omit) }}"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop:
+        - { service: 'ssh' }
+        - { service: 'dns' }
+        - { port: '3000/tcp' }
+        - { port: '80/tcp' }
+
+    - name: Hardering - zablokuj pozostałe porty otwarte domyślnie na Rocky 9
+      firewalld:
+        service: "{{ item }}"
+        state: disabled
+        permanent: yes
+        immediate: yes
+        zone: public
+      loop:
+        - cockpit
+        - dhcpv6-client
+      ignore_errors: yes

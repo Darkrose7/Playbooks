@@ -1,0 +1,75 @@
+---
+- name: Hard Reset - Czyszczenie konfiguracji AdGuard i LVM
+  hosts: linux
+  become: yes
+  vars:
+    # UPEWNIJ SIĘ, ŻE TO TE SAME DYSKI CO W PLAYBOOKU INSTALACYJNYM!
+    disk_1: "/dev/sdb"
+    disk_2: "/dev/sdc"
+    install_dir: "/adguardhome"
+
+  tasks:
+    # 1. Sprzątanie AdGuard Home
+    - name: Zatrzymaj i wyłącz usługę AdGuardHome
+      service:
+        name: AdGuardHome
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Usuń plik usługi systemowej
+      file:
+        path: /etc/systemd/system/AdGuardHome.service
+        state: absent
+
+    - name: Przeładuj demona systemd
+      systemd:
+        daemon_reload: yes
+
+    # 2. Sprzątanie Systemu Plików i LVM
+    - name: Odmontuj katalog (jeśli jest zamontowany)
+      mount:
+        path: "{{ install_dir }}"
+        state: unmounted
+
+    - name: Usuń wpis z /etc/fstab (opcja absent w module mount usuwa też wpis)
+      mount:
+        path: "{{ install_dir }}"
+        state: absent
+
+    - name: Usuń Wolumin Logiczny (LV)
+      community.general.lvol:
+        vg: adg_vg
+        lv: adg_lv
+        state: absent
+        force: yes
+      ignore_errors: yes
+
+    - name: Usuń Grupę Woluminów (VG)
+      community.general.lvg:
+        vg: adg_vg
+        state: absent
+        force: yes
+      ignore_errors: yes
+
+    # 3. Czyszczenie fizyczne dysków (Wipefs)
+    # To kluczowy krok - usuwa sygnatury LVM, żeby dyski były "czyste"
+    - name: Wyczyść sygnatury systemów plików na dysku 1
+      command: wipefs -a -f "{{ disk_1 }}"
+      
+    - name: Wyczyść sygnatury systemów plików na dysku 2
+      command: wipefs -a -f "{{ disk_2 }}"
+
+    # 4. Usunięcie pozostałych plików
+    - name: Usuń katalog instalacyjny
+      file:
+        path: "{{ install_dir }}"
+        state: absent
+
+    - name: Resetuj ustawienia firewalla (opcjonalne)
+      # Usuwamy reguły dodane wcześniej, przywracając strefę public do domyślnych
+      command: firewall-cmd --zone=public --remove-service=dns --permanent
+      ignore_errors: yes
+      
+    - name: Przeładuj firewall
+      command: firewall-cmd --reload
