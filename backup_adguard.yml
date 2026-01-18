@@ -1,0 +1,75 @@
+---
+- name: Backup AdGuard Home i transfer do Ansible
+  hosts: linux
+  become: yes
+  vars:
+    adguard_dir: "/adguardhome"
+    local_backup_dir: "/backups/adguard"
+    webhook_url: "https://discord.com/api/webhooks/TWOJ_TOKEN/..."
+    retention_days: 7
+
+  tasks:
+    - name: Główny blok backupu
+      block:
+        - name: Pobierz datę do nazwy pliku
+          set_fact:
+            timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+            backup_filename: "adguard_backup_{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}.tar.gz"
+
+        - name: Zatrzymaj usługę AdGuardHome
+          service:
+            name: AdGuardHome
+            state: stopped
+
+        - name: Spakuj katalog AdGuardHome
+          community.general.archive:
+            path: "{{ adguard_dir }}"
+            dest: "/tmp/{{ backup_filename }}"
+            format: gz
+
+        - name: Uruchom usługę AdGuardHome
+          service:
+            name: AdGuardHome
+            state: started
+
+        - name: Pobierz backup na serwer Ansible (lokalnie)
+          fetch:
+            src: "/tmp/{{ backup_filename }}"
+            dest: "{{ local_backup_dir }}/{{ backup_filename }}"
+            flat: yes
+
+        - name: Usuń tymczasowe archiwum ze zdalnego serwera
+          file:
+            path: "/tmp/{{ backup_filename }}"
+            state: absent
+
+        - name: Usuń stare backupy lokalne (> 7 dni)
+          find:
+            paths: "{{ local_backup_dir }}"
+            age: "{{ retention_days }}d"
+            patterns: "adguard_backup_*"
+          delegate_to: localhost
+          become: no 
+          register: old_backups
+
+        - name: Skasuj znalezione stare pliki
+          file:
+            path: "{{ item.path }}"
+            state: absent
+          with_items: "{{ old_backups.files }}"
+          delegate_to: localhost
+          become: no
+
+      rescue:
+        - name: Wyślij powiadomienie o błędzie backupu
+          uri:
+            url: "{{ webhook_url }}"
+            method: POST
+            body_format: json
+            body:
+              content: "**AWARIA BACKUPU!**\nNie udało się wykonać kopii zapasowej AdGuard Home dla serwera: `{{ inventory_hostname }}`."
+            status_code: 204
+
+        - name: Zatrzymaj playbook z błędem
+          fail:
+            msg: "Proces backupu zakończony niepowodzeniem."
